@@ -242,16 +242,27 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
                             }
                         }));
 
+                        let sentSuccessfully = false; // Флаг для отслеживания успешной отправки
+
                         for (const discordChannel of discordChannels) {
                             if (discordChannel) {
-                                const attachment = new AttachmentBuilder(filePath);
-                                await discordChannel.send({ files: [attachment] });
+                                try {
+                                    const attachment = new AttachmentBuilder(filePath);
+                                    await discordChannel.send({ files: [attachment] });
+                                    sentSuccessfully = true; // Установим флаг, если отправка успешна
+                                } catch (err) {
+                                    console.error(`[${getCurrentTime()}] Error sending file to Discord channel:`, err);
+                                }
                             }
                         }
 
                         // Помечаем сообщение как обработанное только после успешной отправки
-                        markMessageAsProcessed(message.id, sanitizedChannelName);
-                        console.log(`[${getCurrentTime()}] Message ${message.id} marked as processed.`);
+                        if (sentSuccessfully) {
+                            markMessageAsProcessed(message.id, sanitizedChannelName);
+                            console.log(`[${getCurrentTime()}] Message ${message.id} marked as processed.`);
+                        } else {
+                            console.error(`[${getCurrentTime()}] Failed to send message ${message.id} to Discord.`);
+                        }
                     } else {
                         console.error(`[${getCurrentTime()}] File not found after processing: ${filePath}`);
                     }
