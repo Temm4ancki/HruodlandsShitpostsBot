@@ -34,9 +34,18 @@ function getCurrentTime() {
     return `${hours}:${minutes}`;
 }
 
+// Объект для хранения информации о проверенных папках
+const checkedDirectories = new Set();
+
 // Функция для создания папки с названием телеграм-канала, если она не существует
 async function ensureChannelDirectoryExistence(channelName) {
     const channelDir = path.join(__dirname, 'media', channelName);
+
+    // Проверяем, была ли эта папка уже проверена
+    if (checkedDirectories.has(channelDir)) {
+        return; // Если проверена, ничего не делаем
+    }
+
     try {
         await fs.promises.access(channelDir);
         console.log(`[${getCurrentTime()}] Folder "${channelName}" already exists.`);
@@ -48,6 +57,9 @@ async function ensureChannelDirectoryExistence(channelName) {
             console.error(`[${getCurrentTime()}] Error creating folder "${channelName}":`, err);
         }
     }
+
+    // Добавляем директорию в Set, чтобы не проверять её снова
+    checkedDirectories.add(channelDir);
 }
 
 // Инициализация Telegram Client
@@ -91,39 +103,16 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
 
     discordClient.login(config.discordToken);
 
-    // Функция для получения количества сообщений в Telegram канале
-    async function getMessageCount(channelId) {
-        const result = await telegramClient.invoke(
-            new Api.channels.GetFullChannel({
-                channel: channelId,
-            })
-        );
-        return result.fullChat.participantsCount;
-    }
-
-    // Команда Discord для получения количества сообщений
-    discordClient.on('messageCreate', async (message) => {
-        if (message.content === '!countMessages') {
-            try {
-                const messageCount = await getMessageCount(config.telegramChannelId);
-                message.channel.send(`In the Telegram channel ${config.telegramChannelId} ${messageCount} messages.`);
-            } catch (err) {
-                console.error(err);
-                message.channel.send('Error getting count of messages.');
-            }
-        }
-    });
-
-    // Функция для проверки, было ли сообщение уже обработано
+// Функция для проверки, было ли сообщение уже обработано
     function isMessageProcessed(messageId, channelName) {
         const processedFilePath = path.join(__dirname, 'media', channelName, `${messageId}.processed`);
-        return fs.existsSync(processedFilePath);
+        return fs.existsSync(processedFilePath); // Возвращает true, если файл .processed существует
     }
 
-    // Функция для пометки сообщения как обработанного
+// Функция для пометки сообщения как обработанного
     function markMessageAsProcessed(messageId, channelName) {
         const processedFilePath = path.join(__dirname, 'media', channelName, `${messageId}.processed`);
-        fs.writeFileSync(processedFilePath, 'processed');
+        fs.writeFileSync(processedFilePath, 'processed'); // Создаёт файл с меткой о том, что сообщение обработано
     }
 
     // Функция для получения имени канала
@@ -157,11 +146,12 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
         });
     }
 
-// Изменяем часть кода в функции handleNewMessages
+// Функция для обработки новых сообщений в Telegram канале
     async function handleNewMessages() {
         try {
             const lastProcessedMessageId = getLastProcessedMessageId();
             const channelName = await getChannelName(config.telegramChannelId);
+            const sanitizedChannelName = channelName.replace(/'/g, ""); // Убираем апострофы из названия
             const messages = await telegramClient.invoke(
                 new Api.messages.GetHistory({
                     peer: config.telegramChannelId,
@@ -172,15 +162,17 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
                 })
             );
 
-            await ensureChannelDirectoryExistence(channelName);
+            const mediaDir = path.join(__dirname, 'media', sanitizedChannelName);
+            await ensureChannelDirectoryExistence(sanitizedChannelName);
 
             for (const message of messages.messages) {
-                if (isMessageProcessed(message.id, channelName)) {
+                // Проверяем, было ли сообщение уже обработано
+                if (isMessageProcessed(message.id, sanitizedChannelName)) {
                     if (!loggedProcessedMessages.has(message.id)) {
                         console.log(`[${getCurrentTime()}] Message ${message.id} already processed.`);
                         loggedProcessedMessages.add(message.id);
                     }
-                    continue; // Сообщение уже обработано, пропускаем его
+                    continue; // Пропускаем сообщение, если оно уже обработано
                 }
 
                 if (message.media) {
@@ -188,25 +180,59 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
                     let filePath;
                     let buffer;
 
-                    const mediaDir = path.join(__dirname, 'media', channelName);
-
                     if (media.className === 'MessageMediaPhoto') {
                         filePath = path.join(mediaDir, `${message.id}.jpg`);
                         buffer = await telegramClient.downloadMedia(media);
+
+                        if (buffer) {
+                            console.log(`[${getCurrentTime()}] Downloaded photo size: ${buffer.length} bytes`);
+                            fs.writeFileSync(filePath, buffer);
+
+                            // Проверяем, существует ли файл после сохранения
+                            if (fs.existsSync(filePath)) {
+                                console.log(`[${getCurrentTime()}] Photo saved successfully: ${filePath}`);
+                            } else {
+                                console.error(`[${getCurrentTime()}] Photo file not found after saving: ${filePath}`);
+                                continue; // Пропускаем обработку этого сообщения, если файл не найден
+                            }
+                        } else {
+                            console.error(`[${getCurrentTime()}] Error downloading photo media: ${filePath}`);
+                            continue; // Пропускаем обработку этого сообщения в случае ошибки загрузки
+                        }
                     } else if (media.className === 'MessageMediaDocument' && media.document.mimeType.startsWith('video/')) {
                         const originalFilePath = path.join(mediaDir, `${message.id}.mp4`);
                         buffer = await telegramClient.downloadMedia(media);
-                        fs.writeFileSync(originalFilePath, buffer);
-                        console.log(`[${getCurrentTime()}] Original video saved: ${originalFilePath}`);
 
-                        // Конвертируем видео перед отправкой
-                        const convertedFilePath = path.join(mediaDir, `${message.id}_converted.mp4`);
-                        await convertVideo(originalFilePath, convertedFilePath);
-                        filePath = convertedFilePath;
+                        if (buffer) {
+                            console.log(`[${getCurrentTime()}] Downloaded video size: ${buffer.length} bytes`);
+                            fs.writeFileSync(originalFilePath, buffer);
+
+                            // Проверяем, существует ли файл после сохранения
+                            if (fs.existsSync(originalFilePath)) {
+                                console.log(`[${getCurrentTime()}] Original video saved: ${originalFilePath}`);
+                                const convertedFilePath = path.join(mediaDir, `${message.id}_converted.mp4`);
+                                await convertVideo(originalFilePath, convertedFilePath);
+
+                                // Проверяем, существует ли файл после конвертации
+                                if (fs.existsSync(convertedFilePath)) {
+                                    filePath = convertedFilePath;
+                                    console.log(`[${getCurrentTime()}] Converted video saved: ${filePath}`);
+                                } else {
+                                    console.error(`[${getCurrentTime()}] Converted video not found: ${convertedFilePath}`);
+                                    continue; // Пропускаем обработку этого сообщения, если файл не найден
+                                }
+                            } else {
+                                console.error(`[${getCurrentTime()}] Original video file not found after saving: ${originalFilePath}`);
+                                continue; // Пропускаем обработку этого сообщения, если файл не найден
+                            }
+                        } else {
+                            console.error(`[${getCurrentTime()}] Error downloading video media: ${originalFilePath}`);
+                            continue; // Пропускаем обработку этого сообщения в случае ошибки загрузки
+                        }
                     }
 
-                    if (filePath) {
-                        // Получение всех Discord каналов по их идентификаторам
+                    // Если файл существует, отправляем его в Discord
+                    if (filePath && fs.existsSync(filePath)) {
                         const discordChannels = await Promise.all(config.discordChannelIds.map(async (channelId) => {
                             try {
                                 return await discordClient.channels.fetch(channelId);
@@ -223,7 +249,11 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
                             }
                         }
 
-                        markMessageAsProcessed(message.id, channelName); // Помечаем сообщение как обработанное
+                        // Помечаем сообщение как обработанное только после успешной отправки
+                        markMessageAsProcessed(message.id, sanitizedChannelName);
+                        console.log(`[${getCurrentTime()}] Message ${message.id} marked as processed.`);
+                    } else {
+                        console.error(`[${getCurrentTime()}] File not found after processing: ${filePath}`);
                     }
                 }
             }
@@ -232,7 +262,7 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
         }
     }
 
-    // Получение ID последнего обработанного сообщения
+// Получение ID последнего обработанного сообщения
     function getLastProcessedMessageId() {
         // Здесь должен быть ваш код для чтения ID последнего обработанного сообщения из файла или базы данных
         // Возвращаем 0, если нет предыдущего обработанного сообщения
@@ -246,4 +276,3 @@ const telegramClient = new TelegramClient(new StringSession(config.telegramSessi
     setInterval(handleNewMessages, 60000); // Проверка новых сообщений каждые 60 секунд
 
 })();
-
