@@ -4,7 +4,8 @@ module.exports = {
     telegramSessionString: 'SESSION_STRING', // Запусти GetSessionString.js (вообще можно сделать автоматизацию, но потом)
     telegramPhoneNumber: 'PHONE_NUMBER',
     telegramPassword: 'PASSWORD',
-    telegramChannelId: TELEGRAM_CHANNEL_ID,
+    telegramChannelId: TELEGRAM_CHANNEL_ID, // Можно узнать у @getidsbot в ТГ
+    telegramMessageLimit: 20, // Количество сообщений для получения
     discordToken: 'DISCORD_BOT_TOKEN',
-    discordChannelIds: ['DISCORD_CHANNEL_ID1', 'DISCORD_CHANNEL_ID2'] // Добавь или удали нужное
+    discordChannelIds: ['DISCORD_CHANNEL_ID1', 'DISCORD_CHANNEL_ID2'], // Добавь или удали нужное
 };
